@@ -1,110 +1,208 @@
-# FHEVM Hardhat Template
+# LockVault
 
-A Hardhat-based template for developing Fully Homomorphic Encryption (FHE) enabled Solidity smart contracts using the
-FHEVM protocol by Zama.
+LockVault is an end-to-end encrypted database dApp built on Zama FHEVM. It lets a user create a database with a
+frontend-generated six-digit secret, store numeric entries locked by that secret on-chain, and decrypt everything only
+when the user explicitly signs a decryption request.
 
-## Quick Start
+## Overview
 
-For detailed instructions see:
-[FHEVM Hardhat Quick Start Tutorial](https://docs.zama.ai/protocol/solidity-guides/getting-started/quick-start-tutorial)
+LockVault keeps sensitive numbers off the public ledger while still allowing on-chain storage and indexing. Each
+database has a human-readable name, an owner, and an encrypted secret. Every entry is stored as an encrypted value
+combined with the encrypted secret, so only the owner can reconstruct the clear data after a user-driven decryption.
+
+## Problem It Solves
+
+Public blockchains expose data by default. Traditional encryption workflows usually rely on off-chain servers to hold
+keys, which brings centralization risk and makes it hard to prove that data stayed private. LockVault uses Fully
+Homomorphic Encryption (FHE) to keep secrets and records encrypted on-chain while still allowing the contract to
+operate on them.
+
+## Advantages
+
+- On-chain privacy: secrets and entries are stored as encrypted values, not plaintext.
+- User-controlled decryption: data is decrypted only after the user signs a Zama relayer request.
+- No backend services: the frontend encrypts data and interacts directly with the contract.
+- Clear separation of reads and writes: reads use viem, writes use ethers.
+- No local persistence: decrypted data is kept in memory only, never in localStorage.
+- Deterministic data model: each database is self-contained and keyed by an on-chain id.
+
+## How It Works
+
+1. **Create database**
+   - The frontend generates a 6-digit secret (A).
+   - A is encrypted via the Zama relayer SDK.
+   - The encrypted secret and database name are stored on-chain.
+2. **Decrypt database**
+   - The user requests decryption and signs an EIP-712 payload.
+   - The relayer returns clear values for the encrypted secret and entries.
+3. **Store entry**
+   - The user inputs a number, the frontend encrypts it, and the contract stores `value + secret`.
+4. **Read entries**
+   - After decryption, the UI subtracts the secret from each stored value to reveal the clear data.
+
+## Architecture
+
+- **Smart contract**: `LockVault.sol` stores encrypted databases and entries on Sepolia.
+- **Frontend**: React + Vite UI that handles encryption, wallet signatures, and decryption.
+- **Tasks + tests**: Hardhat tasks for CLI workflows and tests for correctness on a local FHEVM mock.
+
+## Tech Stack
+
+- **Smart contracts**: Solidity 0.8.27, Hardhat, hardhat-deploy, TypeChain
+- **FHE**: Zama FHEVM, `@fhevm/solidity`, `@fhevm/hardhat-plugin`
+- **Frontend**: React, Vite, TypeScript, RainbowKit, wagmi, viem, ethers v6
+- **Network**: Sepolia
+
+## Data Model
+
+- **Database**
+  - `id`: auto-incremented integer
+  - `name`: string
+  - `owner`: address
+  - `secret`: encrypted 6-digit code (euint32)
+  - `createdAt`: timestamp
+- **Entry**
+  - encrypted `value + secret` stored as euint64
+
+## Smart Contract Details
+
+Key functions in `contracts/LockVault.sol`:
+
+- `createDatabase(name, secretInput, inputProof)`: creates a database with an encrypted secret.
+- `storeEntry(databaseId, valueInput, inputProof)`: encrypts and stores a locked entry for the owner.
+- `getDatabase(databaseId)`: returns metadata plus the encrypted secret.
+- `getDatabaseIds(owner)`: lists database ids for an owner.
+- `getEntries(databaseId)`: returns encrypted entries.
+- `getEntryCount(databaseId)`: returns number of entries.
+
+Events:
+
+- `DatabaseCreated(databaseId, owner, name)`
+- `EntryStored(databaseId, entryIndex)`
+
+Access control:
+
+- Only the database owner can store entries.
+- Encrypted values grant ACL access to both the contract and the owner via `FHE.allow`.
+
+## Frontend Behavior
+
+- Wallet connection is handled through RainbowKit and wagmi.
+- Reads use `useReadContract` (viem). Writes use ethers signers.
+- Encryption and decryption are performed through the Zama relayer SDK.
+- Decrypted values live only in memory and are cleared when changing database or contract address.
+- The frontend is locked to Sepolia; it is not intended for localhost chains.
+- Contract address and ABI are stored in `frontend/src/config/contracts.ts` and must be updated after deployment.
+
+## Project Structure
+
+```
+contracts/               Smart contracts
+deploy/                  Hardhat deployment scripts
+tasks/                   Hardhat tasks for CLI workflows
+test/                    Unit tests
+frontend/                React + Vite client
+deployments/sepolia/     Generated ABI and deployment artifacts
+```
+
+## Setup and Usage
 
 ### Prerequisites
 
-- **Node.js**: Version 20 or higher
-- **npm or yarn/pnpm**: Package manager
+- Node.js 20+
+- npm
+- A funded Sepolia wallet for deployment
 
-### Installation
+### Install Dependencies
 
-1. **Install dependencies**
+```bash
+npm install
+```
 
-   ```bash
-   npm install
+### Compile and Test
+
+```bash
+npm run compile
+npm run test
+```
+
+### Local Node and Local Deployment (contract-only)
+
+```bash
+npx hardhat node
+npx hardhat deploy --network anvil
+```
+
+### Deploy to Sepolia
+
+1. Create a `.env` in the project root with:
+
+   ```
+   PRIVATE_KEY=your_private_key
+   INFURA_API_KEY=your_infura_key
+   ETHERSCAN_API_KEY=optional
    ```
 
-2. **Set up environment variables**
+2. Deploy and verify:
 
    ```bash
-   npx hardhat vars set MNEMONIC
-
-   # Set your Infura API key for network access
-   npx hardhat vars set INFURA_API_KEY
-
-   # Optional: Set Etherscan API key for contract verification
-   npx hardhat vars set ETHERSCAN_API_KEY
-   ```
-
-3. **Compile and test**
-
-   ```bash
-   npm run compile
-   npm run test
-   ```
-
-4. **Deploy to local network**
-
-   ```bash
-   # Start a local FHEVM-ready node
-   npx hardhat node
-   # Deploy to local network
-   npx hardhat deploy --network localhost
-   ```
-
-5. **Deploy to Sepolia Testnet**
-
-   ```bash
-   # Deploy to Sepolia
    npx hardhat deploy --network sepolia
-   # Verify contract on Etherscan
-   npx hardhat verify --network sepolia <CONTRACT_ADDRESS>
+   npx hardhat verify --network sepolia <DEPLOYED_CONTRACT_ADDRESS>
    ```
 
-6. **Test on Sepolia Testnet**
+### Update the Frontend Contract Config
 
-   ```bash
-   # Once deployed, you can run a simple test on Sepolia.
-   npx hardhat test --network sepolia
-   ```
+- Copy the ABI from `deployments/sepolia/LockVault.json`.
+- Paste it into `frontend/src/config/contracts.ts` and set the deployed address.
+- The frontend does not use environment variables.
 
-## 📁 Project Structure
+### Run the Frontend
 
-```
-fhevm-hardhat-template/
-├── contracts/           # Smart contract source files
-│   └── FHECounter.sol   # Example FHE counter contract
-├── deploy/              # Deployment scripts
-├── tasks/               # Hardhat custom tasks
-├── test/                # Test files
-├── hardhat.config.ts    # Hardhat configuration
-└── package.json         # Dependencies and scripts
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-## 📜 Available Scripts
+Then open the local Vite URL, connect your wallet to Sepolia, and paste the contract address in the UI.
 
-| Script             | Description              |
-| ------------------ | ------------------------ |
-| `npm run compile`  | Compile all contracts    |
-| `npm run test`     | Run all tests            |
-| `npm run coverage` | Generate coverage report |
-| `npm run lint`     | Run linting checks       |
-| `npm run clean`    | Clean build artifacts    |
+### CLI Tasks
 
-## 📚 Documentation
+```bash
+# Print deployed address
+npx hardhat task:vault-address --network sepolia
 
-- [FHEVM Documentation](https://docs.zama.ai/fhevm)
-- [FHEVM Hardhat Setup Guide](https://docs.zama.ai/protocol/solidity-guides/getting-started/setup)
-- [FHEVM Testing Guide](https://docs.zama.ai/protocol/solidity-guides/development-guide/hardhat/write_test)
-- [FHEVM Hardhat Plugin](https://docs.zama.ai/protocol/solidity-guides/development-guide/hardhat)
+# Create database (secret is a 6-digit number)
+npx hardhat task:create-database --name "Medical vault" --secret 123456 --network sepolia
 
-## 📄 License
+# Store an entry
+npx hardhat task:add-entry --database 1 --value 42 --network sepolia
 
-This project is licensed under the BSD-3-Clause-Clear License. See the [LICENSE](LICENSE) file for details.
+# Decrypt the secret
+npx hardhat task:decrypt-secret --database 1 --network sepolia
 
-## 🆘 Support
+# Decrypt an entry
+npx hardhat task:decrypt-entry --database 1 --index 0 --network sepolia
+```
 
-- **GitHub Issues**: [Report bugs or request features](https://github.com/zama-ai/fhevm/issues)
-- **Documentation**: [FHEVM Docs](https://docs.zama.ai)
-- **Community**: [Zama Discord](https://discord.gg/zama)
+## Security and Privacy Notes
 
----
+- Secrets and entries are encrypted with FHE and never stored in plaintext on-chain.
+- Decryption requires a signed request; the relayer only returns clear values to the signing user.
+- The six-digit secret is intentionally short for usability and demo purposes; it is not high-entropy.
+- This project stores numeric values only.
+- Decrypted values are kept in memory and not persisted to disk or local storage.
 
-**Built with ❤️ by the Zama team**
+## Future Roadmap
+
+- Secret rotation and re-encryption of existing entries.
+- Multi-user access (shared database with per-user ACL).
+- Richer record types beyond single numbers.
+- Pagination and indexing for large datasets.
+- Improved UX for decryption sessions and session expiration.
+- Optional metadata encryption and per-field access rules.
+- Multi-chain deployments as FHEVM support expands.
+
+## License
+
+BSD-3-Clause-Clear. See `LICENSE`.
